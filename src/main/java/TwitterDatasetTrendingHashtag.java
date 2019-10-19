@@ -10,8 +10,6 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.apache.spark.SparkConf;
-import org.apache.spark.SparkContext;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.sql.Dataset;
@@ -31,10 +29,15 @@ public class TwitterDatasetTrendingHashtag
     
     public static void main(String[] args) throws InterruptedException, StreamingQueryException
     {
-        SparkConf conf = new SparkConf().setMaster("local[2]").setAppName("TweetStreamProcessing");
-        conf.set("spark.sql.codegen.wholeStage", "false");
-        SparkSession spark = new SparkSession(new SparkContext(conf));
+        SparkSession spark = SparkSession
+                .builder()
+                .master("local[2]")
+                .appName("TweetStreamProcessing")
+                .config("spark.sql.codegen.wholeStage", "false")
+                .getOrCreate();
+        
         spark.sparkContext().setLogLevel("ERROR");
+        
         Set<String> topics = new HashSet<>();
         topics.add("admintome-test");
         
@@ -44,6 +47,7 @@ public class TwitterDatasetTrendingHashtag
                 .option("kafka.bootstrap.servers", "10.71.69.236:31440")
                 .option("subscribe", "admintome-test")
                 .load();
+        
         
         Dataset<Tuple3<String,Integer,Timestamp>> tweetDataset = df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").map(new MapFunction<Row,Tweet>()
         {
