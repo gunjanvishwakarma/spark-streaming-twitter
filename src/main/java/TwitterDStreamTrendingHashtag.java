@@ -206,7 +206,7 @@ public class TwitterDStreamTrendingHashtag
     {
         Map<String,String> kafkaParams = new HashMap<>();
         kafkaParams.put("bootstrap.servers", "10.71.69.236:31440");
-        kafkaParams.put("group.id", "test");
+        kafkaParams.put("group.id", "testttt");
         //kafkaParams.put("auto.offset.reset", "smallest");
         return kafkaParams;
     }
