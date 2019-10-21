@@ -25,7 +25,6 @@ import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema;
 import org.apache.spark.sql.expressions.Aggregator;
 import org.apache.spark.sql.functions;
 import org.apache.spark.sql.streaming.StreamingQueryException;
-import org.apache.spark.sql.streaming.Trigger;
 import org.joda.time.DateTime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -69,24 +68,24 @@ public class TwitterDatasetTrendingHashtag
         
         TypedColumn<GenericRowWithSchema,Tuple2<String,Integer>> trending_hashtag = new TrendingHashTagAggregator().toColumn().name("trending_hashtag");
         
-        Dataset<Row> max = tweetDataset
+        tweetDataset
                 .withWatermark("_3", "10 seconds")
                 .groupBy(functions.window(col("_3"), "300 seconds", "5 seconds"))
-                .agg(trending_hashtag);
-        
-        max.writeStream()
+                .agg(trending_hashtag)
+                .writeStream()
                 .outputMode("append")
                 .option("truncate", "false")
                 .foreach(new InfluxDBForeachWriter())
                 .start();
-    
-        /*max.writeStream()
-                .format("console")
-                .trigger(Trigger.ProcessingTime(0))
+        
+        tweetDataset
+                .withWatermark("_3", "10 seconds")
+                .groupBy(functions.window(col("_3"), "1 seconds")).count()
+                .writeStream()
                 .outputMode("append")
                 .option("truncate", "false")
-                .start();*/
-        
+                .foreach(new InfluxDBForeachTweetPerSecondWriter())
+                .start();
         spark.streams().awaitAnyTermination();
     }
     
@@ -223,6 +222,110 @@ public class TwitterDatasetTrendingHashtag
             Point point = new JavaPoint(
                     new DateTime(((GenericRowWithSchema)row.get(0)).getTimestamp(1).getTime()),
                     "TrendingHashTagSpark",
+                    tags,
+                    fields
+            );
+            db.write(point);
+        }
+        
+        @Override
+        public void close(Throwable throwable)
+        {
+            try
+            {
+                reactiveInflux.close();
+            }
+            catch(IOException e)
+            {
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    private static class InfluxDBForeachTweetPerSecondWriter extends ForeachWriter<Row>
+    {
+        SyncReactiveInfluxDb db;
+        SyncReactiveInflux reactiveInflux;
+        
+        @Override
+        public boolean open(long l, long l1)
+        {
+            try
+            {
+                ReactiveInfluxConfig config = new JavaReactiveInfluxConfig(new URI("http://10.71.69.236:31948/"));
+                reactiveInflux = new JavaSyncReactiveInflux(config, 30000);
+                db = reactiveInflux.database("twittergraph");
+            }
+            catch(Exception e)
+            {
+                e.printStackTrace();
+            }
+            
+            return true;
+        }
+        
+        @Override
+        public void process(Row row)
+        {
+            HashMap<String,String> tags = new HashMap<>();
+            HashMap<String,Object> fields = new HashMap<>();
+            fields.put("count", row.getLong(1));
+            
+            Point point = new JavaPoint(
+                    new DateTime(((GenericRowWithSchema)row.get(0)).getTimestamp(1).getTime()),
+                    "TweetPerSecondCountSpark",
+                    tags,
+                    fields
+            );
+            db.write(point);
+        }
+        
+        @Override
+        public void close(Throwable throwable)
+        {
+            try
+            {
+                reactiveInflux.close();
+            }
+            catch(IOException e)
+            {
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    private static class InfluxDBForeachTotalTweetWriter extends ForeachWriter<Row>
+    {
+        SyncReactiveInfluxDb db;
+        SyncReactiveInflux reactiveInflux;
+        
+        @Override
+        public boolean open(long l, long l1)
+        {
+            try
+            {
+                ReactiveInfluxConfig config = new JavaReactiveInfluxConfig(new URI("http://10.71.69.236:31948/"));
+                reactiveInflux = new JavaSyncReactiveInflux(config, 30000);
+                db = reactiveInflux.database("twittergraph");
+            }
+            catch(Exception e)
+            {
+                e.printStackTrace();
+            }
+            
+            return true;
+        }
+        
+        @Override
+        public void process(Row row)
+        {
+            HashMap<String,String> tags = new HashMap<>();
+            HashMap<String,Object> fields = new HashMap<>();
+            fields.put("count", row.getLong(1));
+            
+            Point point = new JavaPoint(
+                    new DateTime(((GenericRowWithSchema)row.get(0)).getTimestamp(1).getTime()),
+                    "TotalTweetCountSpark",
                     tags,
                     fields
             );
