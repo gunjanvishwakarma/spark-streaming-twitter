@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
 
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.MapFunction;
+import org.apache.spark.api.java.function.MapGroupsWithStateFunction;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Encoder;
 import org.apache.spark.sql.Encoders;
@@ -24,7 +25,10 @@ import org.apache.spark.sql.TypedColumn;
 import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema;
 import org.apache.spark.sql.expressions.Aggregator;
 import org.apache.spark.sql.functions;
+import org.apache.spark.sql.streaming.GroupState;
+import org.apache.spark.sql.streaming.GroupStateTimeout;
 import org.apache.spark.sql.streaming.StreamingQueryException;
+import org.apache.spark.sql.streaming.Trigger;
 import org.joda.time.DateTime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -52,7 +56,7 @@ public class TwitterDatasetTrendingHashtag
                 .config("spark.sql.codegen.wholeStage", "false")
                 .getOrCreate();
         
-        spark.sparkContext().setLogLevel("ERROR");
+        //spark.sparkContext().setLogLevel("ERROR");
         
         Dataset<Row> df = spark
                 .readStream()
@@ -86,6 +90,19 @@ public class TwitterDatasetTrendingHashtag
                 .option("truncate", "false")
                 .foreach(new InfluxDBForeachTweetPerSecondWriter())
                 .start();
+        
+        tweetDataset
+                .withWatermark("_3", "10 seconds")
+                .groupByKey((MapFunction<Tuple3<String,Integer,Timestamp>,String>)stringIntegerTimestampTuple3 -> "count", Encoders.STRING())
+                .mapGroupsWithState(new RunningCountMapGroupWithStateFunction(), Encoders.bean(CountInfo.class),
+                Encoders.bean(CountUpdate.class),
+                GroupStateTimeout.EventTimeTimeout())
+                .writeStream()
+                .outputMode("update")
+                .option("truncate", "false")
+                .foreach(new InfluxDBForeachTotalTweetWriter())
+                .start();
+        
         spark.streams().awaitAnyTermination();
     }
     
@@ -294,7 +311,7 @@ public class TwitterDatasetTrendingHashtag
         }
     }
     
-    private static class InfluxDBForeachTotalTweetWriter extends ForeachWriter<Row>
+    private static class InfluxDBForeachTotalTweetWriter extends ForeachWriter<CountUpdate>
     {
         SyncReactiveInfluxDb db;
         SyncReactiveInflux reactiveInflux;
@@ -317,14 +334,14 @@ public class TwitterDatasetTrendingHashtag
         }
         
         @Override
-        public void process(Row row)
+        public void process(CountUpdate row)
         {
             HashMap<String,String> tags = new HashMap<>();
             HashMap<String,Object> fields = new HashMap<>();
-            fields.put("count", row.getLong(1));
+            fields.put("count", row.getCount());
             
             Point point = new JavaPoint(
-                    new DateTime(((GenericRowWithSchema)row.get(0)).getTimestamp(1).getTime()),
+                    new DateTime(row.getTimestamp().getTime()),
                     "TotalTweetCountSpark",
                     tags,
                     fields
@@ -372,6 +389,102 @@ public class TwitterDatasetTrendingHashtag
         public Tweet call(Row row) throws Exception
         {
             return new ObjectMapper().readValue(row.getString(1), Tweet.class);
+        }
+    }
+    
+    public static class CountInfo implements Serializable
+    {
+        private long count;
+        
+        public CountInfo()
+        {
+        }
+        
+        public CountInfo(long count)
+        {
+            this.count = count;
+        }
+        
+        public long getCount()
+        {
+            return count;
+        }
+        
+        public void setCount(long count)
+        {
+            this.count = count;
+        }
+    }
+    
+    public static class CountUpdate implements Serializable
+    {
+        private long count;
+        private Timestamp timestamp;
+        
+        public CountUpdate()
+        {
+        }
+    
+        public CountUpdate(long count, Timestamp timestamp)
+        {
+            this.count = count;
+            this.timestamp = timestamp;
+        }
+    
+        public long getCount()
+        {
+            return count;
+        }
+    
+        public void setCount(long count)
+        {
+            this.count = count;
+        }
+    
+        public Timestamp getTimestamp()
+        {
+            return timestamp;
+        }
+    
+        public void setTimestamp(Timestamp timestamp)
+        {
+            this.timestamp = timestamp;
+        }
+    }
+    
+    private static class RunningCountMapGroupWithStateFunction implements MapGroupsWithStateFunction<String,Tuple3<String,Integer,Timestamp>,CountInfo,CountUpdate>
+    {
+        @Override
+        public CountUpdate call(String key, Iterator<Tuple3<String,Integer,Timestamp>> values, GroupState<CountInfo> state) throws Exception
+        {
+            int count = 0;
+            while(values.hasNext())
+            {
+                values.next();
+                count++;
+            }
+            if(state.exists())
+            {
+                CountUpdate countUpdate = new CountUpdate();
+                countUpdate.setCount(count + state.get().getCount());
+                countUpdate.setTimestamp(new Timestamp(state.getCurrentWatermarkMs()));
+            
+                CountInfo countInfo = new CountInfo();
+                countInfo.setCount(countUpdate.getCount());
+                state.update(countInfo);
+                return countUpdate;
+            }
+            else
+            {
+                CountUpdate countUpdate = new CountUpdate();
+                countUpdate.setCount(count);
+                countUpdate.setTimestamp(new Timestamp(state.getCurrentWatermarkMs()));
+            
+                CountInfo countInfo = new CountInfo();
+                countInfo.setCount(countUpdate.getCount());
+                state.update(countInfo);
+                return countUpdate;
+            }
         }
     }
 }
