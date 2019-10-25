@@ -12,9 +12,36 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <version>2.3.2</version>
                 <configuration>
-                    <source>8</source>
-                    <target>8</target>
+                    <source>1.8</source>
+                    <target>1.8</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>2.3</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <filters>
+                        <filter>
+                            <artifact>*:*</artifact>
+                            <excludes>
+                                <exclude>META-INF/*.SF</exclude>
+                                <exclude>META-INF/*.DSA</exclude>
+                                <exclude>META-INF/*.RSA</exclude>
+                            </excludes>
+                        </filter>
+                    </filters>
+                    <finalName>tweeter-${project.artifactId}-${project.version}</finalName>
                 </configuration>
             </plugin>
         </plugins>
@@ -25,31 +52,37 @@
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql-kafka-0-10_2.11</artifactId>
             <version>2.4.4</version>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-streaming_2.11</artifactId>
             <version>2.4.4</version>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql_2.11</artifactId>
             <version>2.4.4</version>
+            <scope>compile</scope>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/org.apache.spark/spark-streaming-kafka -->
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-streaming-kafka_2.11</artifactId>
             <version>1.6.3</version>
+            <scope>compile</scope>
         </dependency>
-    
-        <!-- https://mvnrepository.com/artifact/com.pygmalios/reactiveinflux -->
         <dependency>
             <groupId>com.pygmalios</groupId>
             <artifactId>reactiveinflux_2.11</artifactId>
-            <version>0.10.0.5</version>
+            <version>0.10.0.4</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.typesafe.netty</groupId>
+                    <artifactId>netty-http-pipelining</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
     </dependencies>
-
 </project>
