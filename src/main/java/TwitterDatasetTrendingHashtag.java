@@ -21,14 +21,12 @@ import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.ForeachWriter;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
-import org.apache.spark.sql.TypedColumn;
 import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema;
 import org.apache.spark.sql.expressions.Aggregator;
 import org.apache.spark.sql.functions;
 import org.apache.spark.sql.streaming.GroupState;
 import org.apache.spark.sql.streaming.GroupStateTimeout;
 import org.apache.spark.sql.streaming.StreamingQueryException;
-import org.apache.spark.sql.streaming.Trigger;
 import org.joda.time.DateTime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,7 +49,7 @@ public class TwitterDatasetTrendingHashtag
     {
         SparkSession spark = SparkSession
                 .builder()
-                .master("local[2]")
+                .master("local[8]")
                 .appName("TweetStreamProcessing")
                 .config("spark.sql.codegen.wholeStage", "false")
                 .getOrCreate();
@@ -61,42 +59,39 @@ public class TwitterDatasetTrendingHashtag
         Dataset<Row> df = spark
                 .readStream()
                 .format("kafka")
-                .option("kafka.bootstrap.servers", "10.71.69.236:31440")
+                .option("kafka.bootstrap.servers", "10.71.69.236:31117")
                 .option("subscribe", "admintome-test")
                 .load();
         
-        
-        Dataset<Tuple3<String,Integer,Timestamp>> tweetDataset = df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").map(new MapToTweet(), Encoders.bean(Tweet.class))
-                
-                .flatMap(new TweetFlatMapFunction(), Encoders.tuple(Encoders.STRING(), Encoders.INT(), Encoders.TIMESTAMP()));
-        
-        TypedColumn<GenericRowWithSchema,Tuple2<String,Integer>> trending_hashtag = new TrendingHashTagAggregator().toColumn().name("trending_hashtag");
+        Dataset<Tweet> tweetDataset = df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").
+                map(new MapToTweet(), Encoders.bean(Tweet.class));
         
         tweetDataset
-                .withWatermark("_3", "10 seconds")
-                .groupBy(functions.window(col("_3"), "300 seconds", "5 seconds"))
-                .agg(trending_hashtag)
+                .flatMap(new TweetFlatMapFunction(), Encoders.tuple(Encoders.STRING(), Encoders.INT(), Encoders.TIMESTAMP()))
+                .withWatermark("_3", "300 seconds")
+                .groupBy(functions.window(col("_3"), "30 seconds", "5 seconds"))
+                .agg(new TrendingHashTagAggregator().toColumn().name("trending_hashtag"))
                 .writeStream()
-                .outputMode("append")
+                .outputMode("update")
                 .option("truncate", "false")
                 .foreach(new InfluxDBForeachWriter())
                 .start();
         
         tweetDataset
-                .withWatermark("_3", "10 seconds")
-                .groupBy(functions.window(col("_3"), "1 seconds")).count()
+                .withWatermark("timestamp", "300 seconds")
+                .groupBy(functions.window(tweetDataset.col("timestamp"), "1 seconds")).count()
                 .writeStream()
-                .outputMode("append")
+                .outputMode("update")
                 .option("truncate", "false")
                 .foreach(new InfluxDBForeachTweetPerSecondWriter())
                 .start();
         
         tweetDataset
-                .withWatermark("_3", "10 seconds")
-                .groupByKey((MapFunction<Tuple3<String,Integer,Timestamp>,String>)stringIntegerTimestampTuple3 -> "count", Encoders.STRING())
+                .withWatermark("timestamp", "300 seconds")
+                .groupByKey((MapFunction<Tweet,String>)stringIntegerTimestampTuple3 -> "count", Encoders.STRING())
                 .mapGroupsWithState(new RunningCountMapGroupWithStateFunction(), Encoders.bean(CountInfo.class),
-                Encoders.bean(CountUpdate.class),
-                GroupStateTimeout.EventTimeTimeout())
+                        Encoders.bean(CountUpdate.class),
+                        GroupStateTimeout.NoTimeout())
                 .writeStream()
                 .outputMode("update")
                 .option("truncate", "false")
@@ -376,7 +371,7 @@ public class TwitterDatasetTrendingHashtag
                 String cleanedHashtag = matcher.group(0).trim();
                 if(cleanedHashtag != null)
                 {
-                    list.add(new Tuple3<>(cleanedHashtag, 1, new Timestamp(row.getTimestamp_ms())));
+                    list.add(new Tuple3<>(cleanedHashtag, 1, row.getTimestamp()));
                 }
             }
             return list.iterator();
@@ -424,38 +419,38 @@ public class TwitterDatasetTrendingHashtag
         public CountUpdate()
         {
         }
-    
+        
         public CountUpdate(long count, Timestamp timestamp)
         {
             this.count = count;
             this.timestamp = timestamp;
         }
-    
+        
         public long getCount()
         {
             return count;
         }
-    
+        
         public void setCount(long count)
         {
             this.count = count;
         }
-    
+        
         public Timestamp getTimestamp()
         {
             return timestamp;
         }
-    
+        
         public void setTimestamp(Timestamp timestamp)
         {
             this.timestamp = timestamp;
         }
     }
     
-    private static class RunningCountMapGroupWithStateFunction implements MapGroupsWithStateFunction<String,Tuple3<String,Integer,Timestamp>,CountInfo,CountUpdate>
+    private static class RunningCountMapGroupWithStateFunction implements MapGroupsWithStateFunction<String,Tweet,CountInfo,CountUpdate>
     {
         @Override
-        public CountUpdate call(String key, Iterator<Tuple3<String,Integer,Timestamp>> values, GroupState<CountInfo> state) throws Exception
+        public CountUpdate call(String key, Iterator<Tweet> values, GroupState<CountInfo> state) throws Exception
         {
             int count = 0;
             while(values.hasNext())
@@ -468,7 +463,7 @@ public class TwitterDatasetTrendingHashtag
                 CountUpdate countUpdate = new CountUpdate();
                 countUpdate.setCount(count + state.get().getCount());
                 countUpdate.setTimestamp(new Timestamp(state.getCurrentWatermarkMs()));
-            
+                
                 CountInfo countInfo = new CountInfo();
                 countInfo.setCount(countUpdate.getCount());
                 state.update(countInfo);
@@ -479,12 +474,47 @@ public class TwitterDatasetTrendingHashtag
                 CountUpdate countUpdate = new CountUpdate();
                 countUpdate.setCount(count);
                 countUpdate.setTimestamp(new Timestamp(state.getCurrentWatermarkMs()));
-            
+                
                 CountInfo countInfo = new CountInfo();
                 countInfo.setCount(countUpdate.getCount());
                 state.update(countInfo);
                 return countUpdate;
             }
+        }
+    }
+    
+    public static class TweetPerSecondAggregator extends Aggregator<GenericRowWithSchema,Long,Long> implements Serializable
+    {
+        public Long zero()
+        {
+            return 0L;
+        }
+        
+        @Override
+        
+        public Long reduce(Long hashTagbuffer, GenericRowWithSchema hashTag)
+        {
+            return hashTagbuffer + 1L;
+        }
+        
+        public Long merge(Long b1, Long b2)
+        {
+            return b1 + b2;
+        }
+        
+        public Long finish(Long reduction)
+        {
+            return reduction;
+        }
+        
+        public Encoder<Long> bufferEncoder()
+        {
+            return Encoders.LONG();
+        }
+        
+        public Encoder<Long> outputEncoder()
+        {
+            return Encoders.LONG();
         }
     }
 }
