@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.api.java.function.MapGroupsWithStateFunction;
@@ -27,6 +28,7 @@ import org.apache.spark.sql.functions;
 import org.apache.spark.sql.streaming.GroupState;
 import org.apache.spark.sql.streaming.GroupStateTimeout;
 import org.apache.spark.sql.streaming.StreamingQueryException;
+import org.apache.spark.sql.streaming.Trigger;
 import org.joda.time.DateTime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,20 +49,27 @@ public class TwitterDatasetTrendingHashtag
     
     public static void main(String[] args) throws InterruptedException, StreamingQueryException
     {
+        SparkConf conf = new SparkConf();
+        conf.setJars(new String[]{"/home/ubuntu/tweeter-spark-1.0-SNAPSHOT.jar"});
         SparkSession spark = SparkSession
                 .builder()
                 .master("local[8]")
                 .appName("TweetStreamProcessing")
+                .config(conf)
                 .config("spark.sql.codegen.wholeStage", "false")
                 .getOrCreate();
         
-        //spark.sparkContext().setLogLevel("ERROR");
+        spark.sparkContext().setLogLevel("ERROR");
+        spark.sparkContext().addJar("/home/ubuntu/tweeter-spark-1.0-SNAPSHOT.jar");
         
         Dataset<Row> df = spark
                 .readStream()
                 .format("kafka")
                 .option("kafka.bootstrap.servers", "10.71.69.236:31117")
                 .option("subscribe", "admintome-test")
+                //.option("maxOffsetsPerTrigger", "10")
+                .option("enable.auto.commit", "true")
+        
                 .load();
         
         Dataset<Tweet> tweetDataset = df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").
