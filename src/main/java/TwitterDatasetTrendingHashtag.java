@@ -28,7 +28,6 @@ import org.apache.spark.sql.functions;
 import org.apache.spark.sql.streaming.GroupState;
 import org.apache.spark.sql.streaming.GroupStateTimeout;
 import org.apache.spark.sql.streaming.StreamingQueryException;
-import org.apache.spark.sql.streaming.Trigger;
 import org.joda.time.DateTime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,7 +49,7 @@ public class TwitterDatasetTrendingHashtag
     public static void main(String[] args) throws InterruptedException, StreamingQueryException
     {
         SparkConf conf = new SparkConf();
-        conf.setJars(new String[]{"/home/ubuntu/tweeter-spark-1.0-SNAPSHOT.jar"});
+        conf.setJars(new String[] {"/home/ubuntu/tweeter-spark-1.0-SNAPSHOT.jar"});
         SparkSession spark = SparkSession
                 .builder()
                 .master("local[8]")
@@ -65,11 +64,11 @@ public class TwitterDatasetTrendingHashtag
         Dataset<Row> df = spark
                 .readStream()
                 .format("kafka")
-                .option("kafka.bootstrap.servers", "10.71.69.236:31117")
-                .option("subscribe", "admintome-test")
+                .option("kafka.bootstrap.servers", "10.71.69.236:31117,10.71.69.236:31118,10.71.69.236:31119")
+                .option("subscribe", "tweeter-topic")
                 //.option("maxOffsetsPerTrigger", "10")
                 .option("enable.auto.commit", "true")
-        
+                
                 .load();
         
         Dataset<Tweet> tweetDataset = df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").
