@@ -1,0 +1,1 @@
+spark-2.4.4-bin-hadoop2.7/bin/spark-submit --class TwitterDatasetTrendingHashtag --master k8s://10.71.69.236:6443 --deploy-mode client --conf spark.kubernetes.container.image=10.71.69.236:5000/spark:2.4.4  tweeter-spark-1.0-SNAPSHOT.jar &
